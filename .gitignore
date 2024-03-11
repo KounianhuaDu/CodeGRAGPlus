@@ -3,3 +3,5 @@ output/
 model_weights/
 trained_models/
 models/
+utils/__pycache__/
+__pycache__/
