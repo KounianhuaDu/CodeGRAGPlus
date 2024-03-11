@@ -1,0 +1,81 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python 调试程序: 当前文件",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
+
+
+
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+            },
+            "args": [
+                "--save_dir",
+                "./model/ml-1m/ctr/DeepFM/WDA_Emb32_epoch20_bs128_lr1e-4_cosine_cnvt_arch_128,32_cnvt_type_HEA_eprt_2_wd0_drop0.0_hl200,80_cl3_augment_Trueexport_num_2_specific_export_num_2",
+                "--data_dir",
+                "../data/ml-1m/proc_data",
+                "--augment",
+                "True",
+                "--aug_prefix",
+                "vicuna-7b-v1.5_avg_vicuna-7b-v1.5_sample1",
+                "--task",
+                "ctr",
+                "--convert_arch",
+                "128,32",
+                "--convert_type",
+                "HEA",
+                "--convert_dropout",
+                "0.0",
+                "--epoch_num",
+                "20",
+                "--batch_size",
+                "128",
+                "--lr",
+                "1e-4",
+                "--lr_sched",
+                "cosine",
+                "--weight_decay",
+                "0",
+                "--algo",
+                "DeepFM",
+                "--embed_size",
+                "32",
+                "--export_num",
+                "2",
+                "--specific_export_num",
+                "2",
+                "--final_mlp_arch",
+                "200,80",
+                "--dropout",
+                "0.0",
+                "--dien_gru",
+                "AIGRU",
+                "--max_hist_len",
+                "10"
+            ]
+        }
+    ]
+}
