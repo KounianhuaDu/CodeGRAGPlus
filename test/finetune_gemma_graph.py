@@ -24,7 +24,7 @@ import json
 import argparse
 from datasets import load_dataset
 
-CUTOFF_LEN = 4096
+CUTOFF_LEN = 2048
 
 
 def generate_and_tokenize_prompt(data_point, index):

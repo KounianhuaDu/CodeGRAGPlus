@@ -23,7 +23,7 @@ import json
 import argparse
 from datasets import load_dataset
 
-CUTOFF_LEN = 4096
+CUTOFF_LEN = 2048
 
 
 def generate_and_tokenize_prompt(data_point):
@@ -38,7 +38,10 @@ def generate_and_tokenize_prompt(data_point):
             max_length=CUTOFF_LEN,
         )["input_ids"]
     )
-    assert len_user_prompt_tokens < 4096
+    try:
+        assert len_user_prompt_tokens < CUTOFF_LEN
+    except:
+        print("Wtmd too long!")
     full_tokens = tokenizer(
         user_prompt + output_prompt,
         truncation=True,
@@ -58,6 +61,8 @@ parser.add_argument("--log", type=str, default="logs")
 parser.add_argument("--wandb", action="store_true", default=False)
 parser.add_argument("--model_path", type=str, default="../models/gemma-7b-it")
 parser.add_argument("--model", type=str, default="gemma")
+parser.add_argument("--dataset", type=str, default="CodeContest")
+parser.add_argument("--language", type=str, default="c++")
 parser.add_argument("--eval_steps", type=int, default=200)
 parser.add_argument("--save_steps", type=int, default=200)
 parser.add_argument("--lr_scheduler_type", type=str, default="linear")
@@ -76,8 +81,8 @@ parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--load_in_8bit", action="store_true", help="Load model 8 bit.")
 
 args = parser.parse_args()
-args.data_path = "../data/train/python_code4bench.json"
-args.output_path = f"../trained_models/{args.model}"
+args.data_path = f"../data/train/{args.dataset}/{args.language}.json"
+args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}"
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
