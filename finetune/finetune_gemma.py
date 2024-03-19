@@ -7,8 +7,8 @@ from peft import (
 )
 import torch
 import sys
+import transformers
 import os
-import pickle as pkl
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -27,22 +27,10 @@ from datasets import load_dataset
 CUTOFF_LEN = 2048
 
 
-def generate_and_tokenize_prompt(data_point, index):
+def generate_and_tokenize_prompt(data_point):
     # This function masks out the labels for the input,
     # so that our loss is computed only on the response.
-    user_prompt = """
-        <start_of_turn>user\n
-        Please continue to complete the {} function according to the requirements and function declarations. You are not allowed to modify the given code and do the completion only.\n
-        The syntax graph of a similar code might be:\n
-        {}
-        You can refer to the above knowledge to do the completion. The problem:
-        \n
-        {}
-        <end_of_turn>\n
-""".strip().format(
-        args.language, graph_data_list[index], data_point["input"].strip()
-    )
-    # user_prompt = f"<start_of_turn>user\n{data_point['input']}<end_of_turn>\n"
+    user_prompt = f"<start_of_turn>user\n{data_point['input']}<end_of_turn>\n"
     output_prompt = f"<start_of_turn>model\n{data_point['output']}<end_of_turn>"
     len_user_prompt_tokens = len(
         tokenizer(
@@ -92,35 +80,29 @@ parser.add_argument("--use_lora", type=int, default=1)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--load_in_8bit", action="store_true", help="Load model 8 bit.")
+parser.add_argument("--seed", type=int, default=42)
 
 args = parser.parse_args()
 args.data_path = f"../data/train/{args.dataset}/{args.language}.json"
-args.output_path = (
-    f"../trained_models/{args.dataset}/{args.language}/{args.model}_graph"
-)
+args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}/"
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
-print(f"Modlel will be stored at{args.output_path}")
+print(f"Model will be stored at{args.output_path}")
 
+transformers.set_seed(args.seed)
 
 # Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 tokenizer.padding_side = "right"
 tokenizer.pad_token = tokenizer.eos_token
 
-# graph
-print("Loading graph...")
-with open(os.path.join(f"../data/train/{args.dataset}/tr/", "graphs.pkl"), "rb") as f:
-    graph_data_list = pkl.load(f)
-print("graph loaded")
-
 # Dataset
 DATA_PATH = {"train": args.data_path}
 
 dataset = load_dataset("json", data_files=DATA_PATH)
 print("Data loaded")
-train_dataset = dataset["train"].map(generate_and_tokenize_prompt, with_indices=True)
+train_dataset = dataset["train"].map(generate_and_tokenize_prompt)
 print("Data processed")
 
 
@@ -131,6 +113,7 @@ GRADIENT_ACCUMULATION_STEPS = BATCH_SIZE // MICRO_BATCH_SIZE
 EPOCHS = args.epochs
 MAX_STEPS = max((len(dataset["train"])) // BATCH_SIZE * EPOCHS, EPOCHS)
 LEARNING_RATE = args.lr
+CUTOFF_LEN = 4096
 LORA_R = 8
 LORA_ALPHA = 16
 LORA_DROPOUT = 0.05
@@ -211,13 +194,13 @@ trainer = Trainer(
 )
 model.config.use_cache = False
 
-old_state_dict = model.state_dict
-model.state_dict = (
-    lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-).__get__(model, type(model))
-if torch.__version__ >= "2" and sys.platform != "win32":
-    print("compiling the model")
-    model = torch.compile(model)
+# old_state_dict = model.state_dict
+# model.state_dict = (
+#     lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
+# ).__get__(model, type(model))
+# if torch.__version__ >= "2" and sys.platform != "win32":
+#     print("compiling the model")
+#     model = torch.compile(model)
 
 print("Start training...")
 trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)

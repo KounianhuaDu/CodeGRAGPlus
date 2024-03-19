@@ -26,15 +26,16 @@ assert (
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--data_type", type=str, default="retseq_sampled_feattop15")
 parser.add_argument("--log", type=str, default="logs")
 parser.add_argument("--wandb", action="store_true", default=False)
 parser.add_argument("--model_path", type=str, default="../models/vicuna")
 parser.add_argument("--model", type=str, default="vicuna")
+parser.add_argument("--dataset", type=str, default="CodeContest")
+parser.add_argument("--language", type=str, default="c++")
 parser.add_argument("--eval_steps", type=int, default=200)
 parser.add_argument("--save_steps", type=int, default=200)
 parser.add_argument("--lr_scheduler_type", type=str, default="linear")
-parser.add_argument("--per_device_eval_batch_size", type=int, default=2)
+parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
 parser.add_argument("--total_batch_size", type=int, default=256)
 parser.add_argument("--train_size", type=int, default=65536)
 parser.add_argument("--val_size", type=int, default=1000)
@@ -44,47 +45,20 @@ parser.add_argument("--ignore_data_skip", type=str, default="False")
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--wd", type=float, default=0)
 parser.add_argument("--use_lora", type=int, default=1)
+parser.add_argument("--epochs", type=int, default=1)
+parser.add_argument("--load_in_8bit", action="store_true", help="Load model 8 bit.")
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--epochs", type=int, default=10)
-
-# Here are args of prompt
-parser.add_argument("--dataset", type=str, default="ml-1m")
-parser.add_argument("--K", type=int, default=15)
-parser.add_argument("--train_type", type=str, default="simple")
-parser.add_argument("--test_type", type=str, default="simple")
 
 args = parser.parse_args()
-args.output_path = (
-    f"trained_models/{args.dataset}/{args.data_type}_trained_models/{args.train_size}"
-)
+args.data_path = f"../data/train/{args.dataset}/{args.language}.json"
+args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}/"
+
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
-
-assert args.dataset in ["ml-1m", "BookCrossing", "ml-25m"]
-
-data_path = f"./data/{args.dataset}/proc_data/data"
-
-# Fit for single card V100, increasing bs if GPU allows is OK.
-if args.K <= 16:
-    args.per_device_eval_batch_size = 8
-elif args.K <= 40:
-    args.per_device_eval_batch_size = 4
-else:
-    args.per_device_eval_batch_size = 2
-args.per_device_eval_batch_size = 8
-
-
-print("*" * 100)
-print(args)
-print("*" * 100)
+print(f"Model will be stored at{args.output_path}")
 
 transformers.set_seed(args.seed)
-
-print(f"Shot: {args.train_size}")
-if args.train_type == "mixed":
-    args.train_size *= 2
-print(f"Samples used: {args.train_size}")
 
 if not args.wandb:
     os.environ["WANDB_MODE"] = "disable"
@@ -115,7 +89,7 @@ TARGET_MODULES = [
 ]
 
 
-DATA_PATH = {"train": "../data/train/python.json"}
+DATA_PATH = {"train": args.data_path}
 
 
 device_map = "auto"
@@ -158,76 +132,15 @@ print("Data loaded.")
 
 
 now_max_steps = max((len(data["train"])) // BATCH_SIZE * EPOCHS, EPOCHS)
-if args.resume_from_checkpoint:
-    if args.lora_remote_checkpoint is not None:
-        snapshot_download(
-            repo_id=args.lora_remote_checkpoint,
-            allow_patterns=["*.pt", "*.bin", "*.json"],
-            local_dir=args.resume_from_checkpoint,
-        )
-    checkpoint_name = os.path.join(
-        args.resume_from_checkpoint, "pytorch_model.bin"
-    )  # Full checkpoint
-    if not os.path.exists(checkpoint_name):
-        pytorch_bin_path = checkpoint_name
-        checkpoint_name = os.path.join(
-            args.resume_from_checkpoint, "adapter_model.bin"
-        )  # only LoRA model - LoRA config above has to fit
-        if os.path.exists(checkpoint_name):
-            os.rename(checkpoint_name, pytorch_bin_path)
-            warnings.warn(
-                "The file name of the lora checkpoint'adapter_model.bin' is replaced with 'pytorch_model.bin'"
-            )
-        else:
-            args.resume_from_checkpoint = None
-    # The two files above have a different name depending on how they were saved, but are actually the same.
-    if os.path.exists(checkpoint_name):
-        print(f"Restarting from {checkpoint_name}")
-        adapters_weights = torch.load(checkpoint_name)
-        model = set_peft_model_state_dict(model, adapters_weights)
-    else:
-        print(f"Checkpoint {checkpoint_name} not found")
-
-    train_args_path = os.path.join(args.resume_from_checkpoint, "trainer_state.json")
-
-    if os.path.exists(train_args_path):
-        import json
-
-        base_train_args = json.load(open(train_args_path, "r"))
-        base_max_steps = base_train_args["max_steps"]
-        resume_scale = base_max_steps / now_max_steps
-        if base_max_steps > now_max_steps:
-            warnings.warn(
-                "epoch {} replace to the base_max_steps {}".format(
-                    EPOCHS, base_max_steps
-                )
-            )
-            EPOCHS = None
-            MAX_STEPS = base_max_steps
-        else:
-            MAX_STEPS = now_max_steps
-else:
-    MAX_STEPS = now_max_steps
+MAX_STEPS = now_max_steps
 
 
 def generate_and_tokenize_prompt(data_point):
     # This function masks out the labels for the input,
     # so that our loss is computed only on the response.
     user_prompt = (
-        (
-            f"A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. "
-            f"USER: {data_point['input']} ASSISTANT: "
-        )
-        if data_point["input"]
-        else (
-            f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
-
-### Instruction:
-{data_point["instruction"]}
-
-### Response:
-"""
-        )
+        f"A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. "
+        f"USER: {data_point['input']} ASSISTANT: "
     )
     len_user_prompt_tokens = (
         len(
@@ -269,19 +182,6 @@ def compute_metrics(eval_preds):
     }
 
 
-def preprocess_logits_for_metrics(logits, labels):
-    """
-    labels: (N, seq_len), logits: (N, seq_len, 32000)
-    """
-    labels_index = torch.argwhere(torch.bitwise_or(labels == 3869, labels == 1939))
-    gold = torch.where(labels[labels_index[:, 0], labels_index[:, 1]] == 1939, 0, 1)
-    labels_index[:, 1] = labels_index[:, 1] - 1
-
-    logits = logits[labels_index[:, 0], labels_index[:, 1]][:, [1939, 3869]]
-    prob = torch.softmax(logits, dim=-1)
-    return prob[:, 1], gold
-
-
 trainer = transformers.Trainer(
     model=model,
     train_dataset=train_data,
@@ -313,20 +213,20 @@ trainer = transformers.Trainer(
     data_collator=transformers.DataCollatorForSeq2Seq(
         tokenizer, return_tensors="pt", padding="longest"
     ),
-    compute_metrics=compute_metrics,
-    preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+    # compute_metrics=compute_metrics,
+    # preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     # callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
 )
 model.config.use_cache = False
 
-if args.use_lora:
-    old_state_dict = model.state_dict
-    model.state_dict = (
-        lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-    ).__get__(model, type(model))
+# if args.use_lora:
+#     old_state_dict = model.state_dict
+#     model.state_dict = (
+#         lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
+#     ).__get__(model, type(model))
 
-if torch.__version__ >= "2" and sys.platform != "win32":
-    model = torch.compile(model)
+# if torch.__version__ >= "2" and sys.platform != "win32":
+#     model = torch.compile(model)
 
 
 print("Start training...")

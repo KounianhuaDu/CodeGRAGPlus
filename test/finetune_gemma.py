@@ -7,6 +7,7 @@ from peft import (
 )
 import torch
 import sys
+import transformers
 import os
 from transformers import (
     AutoModelForCausalLM,
@@ -79,15 +80,17 @@ parser.add_argument("--use_lora", type=int, default=1)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--load_in_8bit", action="store_true", help="Load model 8 bit.")
+parser.add_argument("--seed", type=int, default=42)
 
 args = parser.parse_args()
 args.data_path = f"../data/train/{args.dataset}/{args.language}.json"
-args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}"
+args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}/"
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
 print(f"Modlel will be stored at{args.output_path}")
 
+transformers.set_seed(args.seed)
 
 # Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.model_path)
@@ -191,13 +194,13 @@ trainer = Trainer(
 )
 model.config.use_cache = False
 
-old_state_dict = model.state_dict
-model.state_dict = (
-    lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-).__get__(model, type(model))
-if torch.__version__ >= "2" and sys.platform != "win32":
-    print("compiling the model")
-    model = torch.compile(model)
+# old_state_dict = model.state_dict
+# model.state_dict = (
+#     lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
+# ).__get__(model, type(model))
+# if torch.__version__ >= "2" and sys.platform != "win32":
+#     print("compiling the model")
+#     model = torch.compile(model)
 
 print("Start training...")
 trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)

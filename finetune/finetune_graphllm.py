@@ -7,8 +7,8 @@ from peft import (
 )
 import torch
 import sys
+import transformers
 import os
-import pickle as pkl
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -27,22 +27,10 @@ from datasets import load_dataset
 CUTOFF_LEN = 2048
 
 
-def generate_and_tokenize_prompt(data_point, index):
+def generate_and_tokenize_prompt(data_point):
     # This function masks out the labels for the input,
     # so that our loss is computed only on the response.
-    user_prompt = """
-        <start_of_turn>user\n
-        Please continue to complete the {} function according to the requirements and function declarations. You are not allowed to modify the given code and do the completion only.\n
-        The syntax graph of a similar code might be:\n
-        {}
-        You can refer to the above knowledge to do the completion. The problem:
-        \n
-        {}
-        <end_of_turn>\n
-""".strip().format(
-        args.language, graph_data_list[index], data_point["input"].strip()
-    )
-    # user_prompt = f"<start_of_turn>user\n{data_point['input']}<end_of_turn>\n"
+    user_prompt = f"<start_of_turn>user\n{data_point['input']}<end_of_turn>\n"
     output_prompt = f"<start_of_turn>model\n{data_point['output']}<end_of_turn>"
     len_user_prompt_tokens = len(
         tokenizer(
@@ -92,35 +80,29 @@ parser.add_argument("--use_lora", type=int, default=1)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--load_in_8bit", action="store_true", help="Load model 8 bit.")
+parser.add_argument("--seed", type=int, default=42)
 
 args = parser.parse_args()
 args.data_path = f"../data/train/{args.dataset}/{args.language}.json"
-args.output_path = (
-    f"../trained_models/{args.dataset}/{args.language}/{args.model}_graph"
-)
+args.output_path = f"../trained_models/{args.dataset}/{args.language}/{args.model}/"
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)
-print(f"Modlel will be stored at{args.output_path}")
+print(f"Model will be stored at{args.output_path}")
 
+transformers.set_seed(args.seed)
 
 # Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 tokenizer.padding_side = "right"
 tokenizer.pad_token = tokenizer.eos_token
 
-# graph
-print("Loading graph...")
-with open(os.path.join(f"../data/train/{args.dataset}/tr/", "graphs.pkl"), "rb") as f:
-    graph_data_list = pkl.load(f)
-print("graph loaded")
-
 # Dataset
 DATA_PATH = {"train": args.data_path}
 
 dataset = load_dataset("json", data_files=DATA_PATH)
 print("Data loaded")
-train_dataset = dataset["train"].map(generate_and_tokenize_prompt, with_indices=True)
+train_dataset = dataset["train"].map(generate_and_tokenize_prompt)
 print("Data processed")
 
 
@@ -131,6 +113,7 @@ GRADIENT_ACCUMULATION_STEPS = BATCH_SIZE // MICRO_BATCH_SIZE
 EPOCHS = args.epochs
 MAX_STEPS = max((len(dataset["train"])) // BATCH_SIZE * EPOCHS, EPOCHS)
 LEARNING_RATE = args.lr
+CUTOFF_LEN = 4096
 LORA_R = 8
 LORA_ALPHA = 16
 LORA_DROPOUT = 0.05
@@ -151,30 +134,22 @@ if ddp:
     device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
     GRADIENT_ACCUMULATION_STEPS = GRADIENT_ACCUMULATION_STEPS // world_size
 # Model
-model = AutoModelForCausalLM.from_pretrained(
-    args.model_path,
-    load_in_8bit=args.load_in_8bit,
-    device_map="auto",
-)
-model.train()
 
-peft_config = LoraConfig(
-    # task_type=TaskType.CAUSAL_LM,
-    # inference_mode=False,
-    r=LORA_R,
+from gemma4code import Gemma4Code
+
+model = Gemma4Code(
+    input_dim=32,
+    output_dim=3072,
+    load_in_8bit=args.load_in_8bit,
+    use_lora=args.use_lora,
+    lora_r=LORA_R,
     lora_alpha=LORA_ALPHA,
     lora_dropout=LORA_DROPOUT,
-    target_modules=TARGET_MODULES,
+    lora_target_modules=TARGET_MODULES,
 )
-
-if args.load_in_8bit:
-    model = prepare_model_for_int8_training(model)
-
-model = get_peft_model(model, peft_config)
 
 
 config = {
-    "lora_config": peft_config,
     "learning_rate": LEARNING_RATE,
     "num_train_epochs": 1,
     "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
@@ -198,6 +173,48 @@ training_args = TrainingArguments(
     **{k: v for k, v in config.items() if k != "lora_config"},
 )
 
+
+def generate_and_tokenize_prompt(data_point, index):
+    # This function masks out the labels for the input,
+    # so that our loss is computed only on the response.
+    user_prompt = """
+        <start_of_turn>user\n
+        Please continue to complete the {} function according to the requirements and function declarations. You are not allowed to modify the given code and do the completion only.\n
+        The syntax graph embedding of a similar code might be:\n
+        <GraphEmb>
+        You can refer to the above knowledge to do the completion. The problem:
+        \n
+        {}
+        <end_of_turn>\n
+""".strip().format(
+        model.lang, data_point["input"].strip()
+    )
+    unk_ = model.gemma_tokenizer.unk_token
+    user_prompt = user_prompt.replace("<GraphEmb>", unk_)
+    len_user_prompt_tokens = (
+        len(
+            model.gemma_tokenizer(
+                user_prompt,
+                truncation=True,
+                max_length=2048 + 1,
+            )["input_ids"]
+        )
+        - 1
+    ) - 1  # no eos token
+    full_tokens = model.gemma_tokenizer(
+        user_prompt + data_point["output"],
+        truncation=True,
+        max_length=2048 + 1,
+    )["input_ids"]
+    return {
+        "input_ids": full_tokens,
+        "labels": [-100] * len_user_prompt_tokens
+        + full_tokens[len_user_prompt_tokens:],
+        "attention_mask": [1] * (len(full_tokens)),
+        "encoded_idx": (torch.tensor(index)),
+    }
+
+
 # Define trainer
 trainer = Trainer(
     model=model,
@@ -209,17 +226,20 @@ trainer = Trainer(
     # dataset_text_field=["input_ids", "labels", "attention_mask"],
     # callbacks=EarlyStoppingCallback(2),
 )
-model.config.use_cache = False
+model.gemma_model.config.use_cache = False
 
-old_state_dict = model.state_dict
-model.state_dict = (
-    lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-).__get__(model, type(model))
-if torch.__version__ >= "2" and sys.platform != "win32":
-    print("compiling the model")
-    model = torch.compile(model)
+# old_state_dict = model.state_dict
+# model.state_dict = (
+#     lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
+# ).__get__(model, type(model))
+# if torch.__version__ >= "2" and sys.platform != "win32":
+#     print("compiling the model")
+#     model = torch.compile(model)
 
 print("Start training...")
 trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
-model.save_pretrained(OUTPUT_DIR)
+model.gemma_model.save_pretrained(OUTPUT_DIR)
+model_path = os.path.join(OUTPUT_DIR, "adapter.pth")
+embedding_proj = model.embedding_proj.state_dict()
+torch.save({"embedding_proj": embedding_proj}, model_path)

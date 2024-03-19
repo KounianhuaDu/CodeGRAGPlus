@@ -47,8 +47,6 @@ def generate_one_completion(problem, language="c++", model=None, tokenizer=None)
     input_ids = tokenizer([text], return_tensors="pt").to("cuda")
     outputs = model.generate(**input_ids, max_new_tokens=1024)
     message = tokenizer.decode(outputs[0])
-    print(message)
-    assert 0
     start_idx = message.find(f"{chr(96)}{chr(96)}{chr(96)}")
     end_idx = message.rfind(f"{chr(96)}{chr(96)}{chr(96)}")
     try:
@@ -136,7 +134,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model_name", default="gemma", help="test model")
     parser.add_argument("--lang", default="c++", choices=["c++", "python", "java"])
-    parser.add_argument("--output", default="../output", help="output path")
+    parser.add_argument("--output", default="../output_code", help="output path")
     parser.add_argument("--model_path", type=str, default="../models/gemma-7b-it")
 
     args = parser.parse_args()
@@ -149,7 +147,7 @@ if __name__ == "__main__":
         problem_file = "../data/humaneval-x/cpp/data/humaneval_cpp.jsonl.gz"
     elif args.lang == "java":
         problem_file = "../data/humaneval-x/java/data/humaneval_java.jsonl.gz"
-    problem_file = "/home/jzchen/ML/Code/data/code4bench_sample_l.jsonl.gz"
+    problem_file = "/home/jzchen/ML/Code/data/code4bench_filtered_s100.jsonl.gz"
 
     problems = defaultdict(dict)
     with gzip.open(problem_file, "rb") as f:
